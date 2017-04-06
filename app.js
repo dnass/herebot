@@ -1,4 +1,4 @@
-require('env.js');
+require('./env.js');
 var Language = require('@google-cloud/language');
 var gmaps = require('@google/maps');
 var async = require('async');
@@ -60,21 +60,21 @@ getPlaceNames = function(data, cb) {
   });
 
   languageClient.detectEntities(data.text, function(err, results) {
-      if (!err) {
-        data.locationList = _.reject(results, (function(item) {
-          return item.type !== 'LOCATION' || item.name.length < 3;
-        })).map(function(item) {
-          return item.name;
-        });
-        data.locIndex = 0;
-        if (data.locationList.length) {
-          cb(null, data);
-        } else {
-          cb('No locations found', data);
-        }
+    if (!err) {
+      data.locationList = _.reject(results, (function(item) {
+        return item.type !== 'LOCATION' || item.name.length < 3;
+      })).map(function(item) {
+        return item.name;
+      });
+      data.locIndex = 0;
+      if (data.locationList.length) {
+        cb(null, data);
       } else {
-        cb(err, data);
+        cb('No locations found', data);
       }
+    } else {
+      cb(err, data);
+    }
   });
 };
 
@@ -134,8 +134,8 @@ getImages = function(data, cb) {
   console.log('loading images');
 
   var res = 600;
-  var levels = 16;
-  var start = 2;
+  var levels = 14;
+  var start = 3;
   var seq = [];
 
   for (var step = 0; step < levels; step++) {
@@ -143,7 +143,7 @@ getImages = function(data, cb) {
   }
 
   var lat = data.coords.lat,
-      lng = data.coords.lng;
+    lng = data.coords.lng;
   data.images = [];
 
   var getFile = function(step, dlcallback) {
@@ -226,9 +226,12 @@ postTweet = function(data, cb) {
         };
 
         t.post('statuses/update', params, function(err, dat, response) {
-          data.tweetDate = dat.created_at;
-          data.tweetID = dat.id_str;
-          cb(null, data);
+          if (err) cb(err, data);
+          else {
+            data.tweetDate = dat.created_at;
+            data.tweetID = dat.id_str;
+            cb(null, data);
+          }
         });
       }
     });

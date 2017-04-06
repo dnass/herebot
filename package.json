@@ -4,8 +4,8 @@
   "description": "You are here.",
   "main": "app.js",
   "dependencies": {
-    "@google-cloud/language": "^4.5.0",
-    "@google/maps": "4.5.0",
+    "@google-cloud/language": "^0.10.0",
+    "@google/maps": "^0.3.1",
     "async": "^2.3.0",
     "fs-extra": "^2.1.2",
     "gm": "^1.23.0",

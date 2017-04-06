@@ -5,7 +5,6 @@ var async = require('async');
 var request = require('request');
 var fs = require('fs-extra');
 var Gm = require('gm');
-var wordfilter = require('wordfilter');
 var Twit = require('twit');
 var _ = require('lodash');
 
@@ -191,10 +190,7 @@ formatTweet = function(data, cb) {
   console.log('writing tweet');
 
   data.tweetText = '#' + data.location.split(' ').join('') + ': you are here.';
-  if (wordfilter.blacklisted(data.tweetText))
-    cb('That is obscene', data);
-  else
-    cb(null, data);
+  cb(null, data);
 };
 
 postTweet = function(data, cb) {
@@ -285,8 +281,7 @@ run = function() {
 setTimeout(function() {
   try {
     run();
-  }
-  catch (e) {
+  } catch (e) {
     console.log(e);
   }
 }, 60000 * 60);

@@ -1,325 +1,179 @@
-require('./env.js');
-var languageClient = require('@google-cloud/language')({
-  projectId: process.env.LANGUAGE_PROJECT_ID
-});
-var googleMapsClient = require('@google/maps').createClient({
-  Promise: Promise,
-  key: process.env.MAPS_API_KEY
-});
-var async = require('async');
-var request = require('request');
-var fs = require('fs-extra');
-var wordfilter = require('wordfilter');
-var Gm = require('gm');
-var Twit = require('twit-promise');
-var _ = require('lodash');
+const glang = require('@google-cloud/language');
+const gmaps = require('@google/maps');
+const request = require('request');
+const fsp = require('fs-promise');
+const wordfilter = require('wordfilter');
+const Gm = require('gm');
+const _ = require('lodash');
+const Tbb = require('twitter-bot-bot');
 
-var T = new Twit({
-  consumer_key: process.env.TWIT_CONSUMER_KEY,
-  consumer_secret: process.env.TWIT_CONSUMER_SECRET,
-  access_token: process.env.TWIT_ACCESS_TOKEN,
-  access_token_secret: process.env.TWIT_ACCESS_TOKEN_SECRET
-});
+const dataPath = `${__dirname}/data.json`;
 
-function queryTweets() {
-  console.log('> getting tweets');
-  return T.get('search/tweets', {
+const bot = new Tbb(run);
+
+function getTweets() {
+  bot.log('getting tweets');
+  return bot.get('search/tweets', {
     q: 'a',
     count: 25,
     result_type: 'recent',
     lang: 'en'
-  });
-}
-
-function getTweetText(result) {
-  console.log('> retrieved ' + result.data.statuses.length + ' tweets');
-  console.log('> getting tweet text');
-  var tweetData = {
-    tweetTexts: result.data.statuses.map(function(status) {
-      return status.text;
-    })
-  };
-  return tweetData;
-}
-
-function extractWords(tweetData) {
-  console.log('> extracting words from tweets');
-  try {
-    var excludeNonAlpha = /[^a-zA-Z]+/g;
-    var excludeURLs = /https?:\/\/[-a-zA-Z0-9@:%_\+.~#?&\/=]+/g;
-    var excludeHandles = /@[a-z0-9_-]+/g;
-    var excludeRT = /\bRT\b/gi;
-    var excludePatterns = [excludeURLs, excludeHandles, excludeNonAlpha, excludeRT];
-    tweetData.text = tweetData.tweetTexts.join(' ');
-    for (var pat = 0; pat < excludePatterns.length; pat++) {
-      tweetData.text = tweetData.text.replace(excludePatterns[pat], ' ');
+  }).then(result => {
+    bot.log(`retrieved ${result.data.statuses.length} tweets`);
+    bot.log('getting tweet text');
+    const tweetData = {
+      tweetTexts: result.data.statuses.map(status => status.text)
     }
+    bot.log('extracting words from tweets');
+    const excludePatterns = [/https?:\/\/[-a-zA-Z0-9@:%_\+.~#?&\/=]+/g, /@[a-z0-9_-]+/g, /[^a-zA-Z]+/g, /\bRT\b/gi];
+    excludePatterns.forEach(pat => {
+      tweetData.text = tweetData.tweetTexts.join(' ').replace(pat, ' ');
+    });
     return tweetData;
-  } catch (err) {
-    throw err;
-  }
+  })
 }
 
-function getEntityNames(tweetData) {
-  console.log('> getting entity names');
-  return languageClient.detectEntities(tweetData.text)
-    .then(function(results) {
+function getEntities(tweetData) {
+  bot.log('getting entity names');
+  return glang({
+    projectId: bot.params.LANGUAGE_PROJECT_ID,
+    keyFilename: `${__dirname}/${bot.params.GOOGLE_APPLICATION_CREDENTIALS}`
+  }).detectEntities(tweetData.text)
+    .then(results => {
       tweetData.entities = results[0];
-      return tweetData;
+      bot.log('filtering out non-places');
+      tweetData.locationList = _.reject(tweetData.entities, item => item.type !== 'LOCATION' || item.name.length < 3)
+        .map(item => item.name);
+      if (tweetData.locationList.length) {
+        bot.log(`${tweetData.locationList.length} locations found`);
+        return tweetData;
+      } else
+        throw Error('no locations found.');
     });
-}
-
-function removeNonPlaces(tweetData) {
-  console.log('> filtering out non-places');
-  tweetData.locationList = _.reject(tweetData.entities, (function(item) {
-    return item.type !== 'LOCATION' || item.name.length < 3;
-  })).map(function(item) {
-    return item.name;
-  });
-  if (tweetData.locationList.length) {
-    tweetData.locIndex = 0;
-    console.log('> ' + tweetData.locationList.length + ' locations found');
-    return tweetData;
-  } else
-    throw Error('no locations found.');
-}
-
-function getList(tweetData) {
-  return new Promise(function(resolve, reject) {
-    fs.readFile(process.env.TWEET_LIST, 'utf8', function(err, fileData) {
-      if (err)
-        reject(err);
-      else {
-        tweetData.fileData = JSON.parse(fileData);
-        resolve(tweetData);
-      }
-    });
-  });
 }
 
 function filterList(tweetData) {
-  console.log('> filtering list');
-  var excludeList = ["anywhere", "nowhere", "here", "there", "country", "city", "town", "state"];
-  try {
-    var fullList = tweetData.fileData.tweets.map(function(tweet) {
-      return tweet.location.toLowerCase();
-    }).concat(excludeList);
-    tweetData.locationList = _.reject(tweetData.locationList, function(item) {
-      return fullList.indexOf(item.toLowerCase()) > -1;
-    });
-    if (tweetData.locationList.length) {
-      console.log('> ' + tweetData.locationList.length + ' locations remain');
-      return tweetData;
-    } else
-      throw Error('all locations rejected.');
-  } catch (err) {
-    throw err;
-  }
+  bot.log('reading data')
+  return fsp.readFile(dataPath, 'utf8')
+    .then(fileData => {
+      tweetData.fileData = JSON.parse(fileData);
+      bot.log('filtering list');
+      const excludeList = ["anywhere", "nowhere", "here", "there", "country", "city", "town", "state"];
+      const fullList = tweetData.fileData.locations.map(location => location.toLowerCase())
+        .concat(excludeList);
+      tweetData.locationList = _.reject(tweetData.locationList, item => fullList.indexOf(item.toLowerCase()) > -1);
+      if (tweetData.locationList.length) {
+        bot.log(`${tweetData.locationList.length} locations remain`);
+        return tweetData;
+      } else
+        throw Error('all locations rejected.');
+    })
 }
 
 function checkGeocode(address) {
-  console.log('> checking geocode for ' + address);
-  return googleMapsClient.geocode({
-    address: address
-  }).asPromise();
+  bot.log(`checking geocode for ${address}`);
+  return gmaps.createClient({
+    Promise: Promise,
+    key: bot.params.MAPS_API_KEY
+  }).geocode({ address }).asPromise();
 }
 
 function getCoords(tweetData) {
-  console.log('> checking coordinates');
-  return Promise.all(tweetData.locationList.map(function(location) {
-    return checkGeocode(location);
-  })).then(function(results) {
-    tweetData.allCoords = results;
-    return tweetData;
-  });
-}
-
-function pickCoords(tweetData) {
-  console.log('> picking coordinates');
-  for (var i = 0; i < tweetData.allCoords.length; i++) {
-    var loc = tweetData.allCoords[i].json.results[0];
-    if (loc) {
-      tweetData.coords = loc.geometry.location;
-      tweetData.location = tweetData.locationList[i];
-      console.log('> picked ' + tweetData.location);
-      return tweetData;
-    }
-  }
-  throw Error('no coordinates found');
+  bot.log('checking coordinates');
+  return Promise.all(tweetData.locationList.map(location => checkGeocode(location)))
+    .then(results => {
+      bot.log('picking coordinates');
+      for (let i = 0; i < results.length; i++) {
+        const location = results[i].json.results[0];
+        if (location) {
+          tweetData.coords = location.geometry.location;
+          tweetData.location = tweetData.locationList[i];
+          bot.log(`picked ${tweetData.location}`);
+          return tweetData;
+        }
+      }
+      throw Error('no coordinates found');
+    })
 }
 
 function makeDir(tweetData) {
-  console.log('> making directory');
-  return new Promise(function(resolve, reject) {
-    tweetData.dirName = tweetData.location.replace(' ', '');
-    fs.mkdir(tweetData.dirName, function(err) {
-      if (err)
-        reject(err);
-      else {
-        resolve(tweetData);
-      }
+  bot.log('making directory');
+  tweetData.dirName = `${__dirname}/${tweetData.location.replace(' ', '')}`;
+  return fsp.mkdir(tweetData.dirName)
+    .then(() => {
+      return tweetData
     });
-  });
 }
 
 function loadImage(url, filename) {
-  var file = request.get(url, function(err, response, body) {
-    if (err)
-      throw err;
-  }).pipe(fs.createWriteStream(filename));
+  const file = request.get(url)
+    .pipe(fsp.createWriteStream(filename));
 
   return new Promise(function(resolve, reject) {
-    file.on('finish', function() {
-      console.log('> downloaded ' + filename);
+    file.on('finish', () => {
+      bot.log('downloaded ' + filename);
       resolve(filename);
-    }).on('error', function(err) {
-      reject(err);
-    });
+    }).on('error', (err) => reject(err));
   });
 }
 
 function getImages(tweetData) {
-  console.log('> loading images');
-
-  var res = 600;
-  var levels = 14;
-  var start = 3;
-  var seq = [];
-  for (var step = 0; step < levels; step++) {
-    seq.push(step);
-  }
-  var lat = tweetData.coords.lat,
+  bot.log('loading images');
+  const lat = tweetData.coords.lat,
     lng = tweetData.coords.lng;
 
-  return Promise.all(seq.map(function(step) {
-    var url = 'https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/' + [lng, lat, step + start].join(',') +
-      '/' + res + 'x' + res +
-      '?access_token=' + process.env.MAPBOX_TOKEN;
-    var filename = tweetData.dirName + '/img' + step + '.jpg';
+  return Promise.all(_.range(3, 17).map(step => {
+    const url = `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lng},${lat},${step}/600x600?access_token=${bot.params.MAPBOX_TOKEN}`;
+    const filename = `${tweetData.dirName}/img${step}.jpg`;
     return loadImage(url, filename);
-  })).then(function(results) {
-    tweetData.images = results;
+  })).then(images => {
+    tweetData.images = images;
     return tweetData;
   });
 }
 
-function makeGif(tweetData) {
-  console.log('> generating gif');
-  return new Promise(function(resolve, reject) {
-    var gm = new Gm();
-    tweetData.gifFile = tweetData.dirName + '/animated.gif';
-    tweetData.images.forEach(function(img) {
-      gm.in(img);
-    });
-    gm
-      .delay(30)
-      .write(tweetData.gifFile, function(err) {
-        if (err)
-          reject(err);
-        else
-          resolve(tweetData);
-      });
-  });
-}
-
-function formatTweet(tweetData) {
-  console.log('> writing tweet');
-  tweetData.tweetText = tweetData.location + ': you are here.';
+function writeTweet(tweetData) {
+  bot.log('writing tweet');
+  tweetData.tweetText = `${tweetData.location}: you are here.`;
   wordfilter.removeWord('paki');
   if (wordfilter.blacklisted(tweetData.tweetText))
-    throw Error('naughty word found');
-  else
-    return tweetData;
-}
+    throw Error('blacklisted word found');
 
-function postTweet(tweetData) {
-  var mediaIdStr;
-  return new Promise(function(resolve, reject) {
-    fs.readFile(tweetData.gifFile, {
-      encoding: 'base64'
-    }, function(err, data) {
-      if (err)
-        reject(err);
-      else {
-        resolve(data);
-      }
-    });
-  }).then(function(image) {
-    console.log('> uploading media');
-    return T.post('media/upload', {
-      media_data: image
-    });
-  }).then(function(result) {
-    mediaIdStr = result.data.media_id_string;
-    var altText = "Zooming in on " + tweetData.location;
-    var meta_params = {
-      media_id: mediaIdStr,
-      alt_text: {
-        text: altText
-      }
-    };
-    return T.post('media/metadata/create', meta_params);
-  }).then(function() {
-    console.log('> posting tweet');
-    var params = {
-      status: tweetData.tweetText,
-      media_ids: [mediaIdStr]
-    };
-    return T.post('statuses/update', params);
-  }).then(function(result) {
-    tweetData.tweetDate = result.data.created_at;
-    tweetData.tweetID = result.data.id_str;
-    return tweetData;
-  });
-}
-
-function deleteFolder(tweetData) {
-  console.log('> cleaning up');
-  return new Promise(function(resolve, reject) {
-    fs.remove(tweetData.dirName, function(err) {
-      if (err)
-        reject(err);
-      else
+  bot.log('generating gif');
+  const gm = new Gm();
+  tweetData.gifFile = `${tweetData.dirName}/animated.gif`;
+  tweetData.images.forEach(image => gm.in(image));
+  return new Promise((resolve, reject) => {
+    gm.delay(30)
+      .write(tweetData.gifFile, err => {
+        if (err) reject(err);
         resolve(tweetData);
-    });
-  });
+      })
+  }).then(tweetData => {
+    return fsp.readFile(tweetData.gifFile, { encoding: 'base64' })
+      .then(image => {
+        return bot.tweet({
+          media: image,
+          status: tweetData.tweetText,
+          altText: tweetData.tweetText
+        })
+      }).then(result => {
+        tweetData.tweetOutput = result;
+        return tweetData;
+      })
+  })
 }
 
-function updateList(tweetData) {
-  console.log('> updating tweetlist');
-  tweetData.fileData.tweets.push({
-    location: tweetData.location,
-    date: tweetData.tweetDate,
-    id: tweetData.tweetID
-  });
-  var json = JSON.stringify(tweetData.fileData);
-  return new Promise(function(resolve, reject) {
-    fs.writeFile(process.env.TWEET_LIST, json, 'utf8', function(err) {
-      if (err)
-        reject(err);
-      else
-        resolve(tweetData);
-    });
-  });
+function cleanup(tweetData) {
+  bot.log('cleaning up');
+  return fsp.remove(tweetData.dirName)
+    .then(() => {
+      bot.log('writing data');
+      tweetData.fileData.locations.push(tweetData.location);
+      return fsp.writeFile(dataPath, JSON.stringify(tweetData.fileData), 'utf8');
+    })
 }
 
-function handleError(err) {
-  if (err.stack)
-    console.log(err.stack);
-  else
-    console.log('Error: ' + err);
-}
-
-function runSerial(tasks) {
-  var result = Promise.resolve();
-  tasks.forEach(function(task) {
-    result = result.then(task);
-  });
-  return result.then(console.log).catch(handleError);
-}
-
-setTimeout(function() {
-  runSerial([queryTweets, getTweetText, extractWords, getEntityNames, removeNonPlaces, getList, filterList, getCoords,
-    pickCoords, makeDir, getImages, makeGif, formatTweet, postTweet, deleteFolder, updateList
-  ]);
-}, 60000 * 60);
+function run() {
+  return getTweets().then(getEntities).then(filterList).then(getCoords).then(makeDir).then(getImages).then(writeTweet).then(cleanup);
+};

@@ -1,6 +1,6 @@
 {
   "name": "herebot",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "You are here.",
   "main": "app.js",
   "repository": {
@@ -10,18 +10,26 @@
   "dependencies": {
     "@google-cloud/language": "^0.10.0",
     "@google/maps": "^0.3.1",
-    "async": "^2.3.0",
-    "fs-extra": "^2.1.2",
+    "fs-promise": "^2.0.2",
     "gm": "^1.23.0",
     "lodash": "^4.17.4",
     "request": "^2.81.0",
-    "twit-promise": "^2.1.0",
-    "wordfilter": "^0.2.6"
+    "twitter-bot-bot": "^0.2.4",
+    "wordfilter": "^0.2.6",
   },
   "devDependencies": {},
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Daniel Nass",
-  "license": "ISC"
+  "license": "ISC",
+  "botConfig": {
+    "params": [
+      "MAPS_API_KEY",
+      "MAPBOX_TOKEN",
+      "LANGUAGE_PROJECT_ID",
+      "GOOGLE_APPLICATION_CREDENTIALS"
+    ],
+    "handle": "YoureHereBot"
+  }
 }

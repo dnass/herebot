@@ -15,7 +15,7 @@
     "lodash": "^4.17.4",
     "request": "^2.81.0",
     "twitter-bot-bot": "^0.2.4",
-    "wordfilter": "^0.2.6",
+    "wordfilter": "^0.2.6"
   },
   "devDependencies": {},
   "scripts": {
